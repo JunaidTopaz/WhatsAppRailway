@@ -29,7 +29,11 @@ const client = new Client({
             '--no-first-run',
             '--no-zygote',
             '--single-process',
-            '--disable-gpu'
+            '--disable-gpu',
+            '--disable-software-rasterizer',
+            '--disable-dev-tools',
+            '--no-default-browser-check',
+            '--disable-features=IsolateOrigins,site-per-process'
         ]
     }
 });
