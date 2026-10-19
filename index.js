@@ -33,62 +33,72 @@ async function connectToWhatsApp() {
         const { connection, lastDisconnect } = update;
 
         if (connection === 'close') {
-            const shouldReconnect = (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut);
-            console.log('⚠️ Connection closed. Reconnecting...', shouldReconnect);
-            if (shouldReconnect) connectToWhatsApp();
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            console.log(`⚠️ Connection closed (Status: ${statusCode}). Reconnecting: ${shouldReconnect}`);
+            if (shouldReconnect) {
+                setTimeout(connectToWhatsApp, 3000);
+            }
         } else if (connection === 'open') {
             console.log('🚀 24/7 Gemini WhatsApp Bot is ONLINE and listening!');
             cron.schedule('*/30 * * * * *', () => checkScheduledReminders(sock));
         }
     });
 
-    // Listen to ALL incoming and outgoing chat messages
+    // Listen for ALL message events (notify and append types)
     sock.ev.on('messages.upsert', async (m) => {
         try {
-            const msg = m.messages[0];
-            if (!msg || !msg.message) return;
+            if (!m.messages || m.messages.length === 0) return;
 
-            const remoteJid = msg.key.remoteJid;
-            
-            // Extract text from various WhatsApp message types
-            const text = msg.message.conversation || 
-                         msg.message.extendedTextMessage?.text || 
-                         msg.message.imageMessage?.caption || 
-                         '';
+            for (const msg of m.messages) {
+                if (!msg.message) continue;
 
-            if (!text) return;
+                const remoteJid = msg.key.remoteJid;
+                
+                // Ignore status broadcast updates
+                if (remoteJid.includes('status@broadcast')) continue;
 
-            console.log(`📩 [Message Received] From JID: ${remoteJid} | Content: "${text}"`);
+                // Extract text from standard text, extended text, or media caption
+                const text = msg.message.conversation || 
+                             msg.message.extendedTextMessage?.text || 
+                             msg.message.imageMessage?.caption || 
+                             msg.message.videoMessage?.caption || 
+                             '';
 
-            // Command Trigger: !remind <task> in <time>
-            if (text.toLowerCase().startsWith('!remind')) {
-                console.log('⚡ Processing !remind command...');
-                await handleManualReminder(sock, remoteJid, text);
-                return;
-            }
+                if (!text.trim()) continue;
 
-            // Command Trigger: !gemini <prompt>
-            if (text.toLowerCase().startsWith('!gemini')) {
-                console.log('⚡ Processing !gemini command...');
-                await handleGeminiQuery(sock, remoteJid, text);
-                return;
-            }
+                console.log(`📩 [Message Detected] From: ${remoteJid} | Content: "${text}"`);
 
-            // Passive Auto-Detection (ignore status/broadcast messages)
-            if (text.length > 8 && !remoteJid.includes('status@broadcast')) {
-                console.log('🧠 Analyzing context with Gemini 3.8 Flash...');
-                await parseChatForCommitments(sock, remoteJid, text);
+                // 1. Command Trigger: !remind <task> in <time>
+                if (text.toLowerCase().startsWith('!remind')) {
+                    console.log('⚡ Handling !remind command...');
+                    await handleManualReminder(sock, remoteJid, text);
+                    continue;
+                }
+
+                // 2. Command Trigger: !gemini <prompt>
+                if (text.toLowerCase().startsWith('!gemini')) {
+                    console.log('⚡ Handling !gemini command...');
+                    await handleGeminiQuery(sock, remoteJid, text);
+                    continue;
+                }
+
+                // 3. Passive Auto-Detection (runs on regular messages sent by others)
+                if (text.length > 8 && !msg.key.fromMe) {
+                    console.log('🧠 Analyzing message with Gemini 3.8 Flash...');
+                    await parseChatForCommitments(sock, remoteJid, text);
+                }
             }
         } catch (err) {
-            console.error('❌ Error handling message:', err.message);
+            console.error('❌ Error in messages.upsert handler:', err);
         }
     });
 }
 
 async function parseChatForCommitments(sock, jid, text) {
     try {
-        const prompt = `Analyze this WhatsApp message: "${text}". Did the sender make a clear commitment or promise to send a document, update, or follow-up in the future?`;
-        
+        const prompt = `Analyze this WhatsApp message received: "${text}". Did the sender promise a task, document, update, or follow-up?`;
+
         const res = await ai.models.generateContent({
             model: 'gemini-3.8-flash',
             contents: prompt,
@@ -107,7 +117,6 @@ async function parseChatForCommitments(sock, jid, text) {
         });
 
         const parsed = JSON.parse(res.text);
-        console.log('💡 Gemini Analysis Output:', parsed);
 
         if (parsed.hasReminder && parsed.delayMinutes > 0) {
             const triggerTime = new Date(Date.now() + parsed.delayMinutes * 60 * 1000);
@@ -116,19 +125,26 @@ async function parseChatForCommitments(sock, jid, text) {
             await sock.sendMessage(jid, { 
                 text: `🤖 *Gemini Bot*: Auto-detected commitment. Reminder set in ${parsed.delayMinutes}m: "${parsed.reason}"` 
             });
-            console.log(`✅ Reminder scheduled for ${jid} in ${parsed.delayMinutes}m`);
+            console.log(`✅ Auto-reminder queued for ${jid} in ${parsed.delayMinutes}m`);
         }
     } catch (err) {
-        console.error('❌ Gemini Parse Error:', err.message);
+        console.error('❌ Auto-parse error:', err.message);
     }
 }
 
 async function handleManualReminder(sock, jid, fullText) {
     const text = fullText.replace(/^!remind\s*/i, '').trim();
-    if (!text) return sock.sendMessage(jid, { text: '🤖 Usage: `!remind <task> in <time>`' });
+
+    if (!text) {
+        await sock.sendMessage(jid, { 
+            text: '🤖 *Usage*: `!remind <task description> in <time>` (e.g. `!remind call client in 10 minutes`)' 
+        });
+        return;
+    }
 
     try {
-        const prompt = `Extract task description and delay duration in total minutes from: "${text}". Strictly JSON output.`;
+        const prompt = `Extract task description and delay duration in total minutes from: "${text}". Output strictly JSON.`;
+
         const res = await ai.models.generateContent({
             model: 'gemini-3.8-flash',
             contents: prompt,
@@ -149,7 +165,10 @@ async function handleManualReminder(sock, jid, fullText) {
         const triggerTime = new Date(Date.now() + parsed.delayMinutes * 60 * 1000);
 
         activeReminders.push({ jid, reason: parsed.reason, triggerTime, fired: false });
-        await sock.sendMessage(jid, { text: `✅ *Reminder set!* In ${parsed.delayMinutes}m: "${parsed.reason}".` });
+        await sock.sendMessage(jid, { 
+            text: `✅ *Reminder set!* In ${parsed.delayMinutes}m: "${parsed.reason}".` 
+        });
+        console.log(`✅ Manual reminder queued for ${jid} in ${parsed.delayMinutes}m`);
     } catch (err) {
         await sock.sendMessage(jid, { text: '❌ Could not parse reminder request.' });
     }
@@ -157,17 +176,23 @@ async function handleManualReminder(sock, jid, fullText) {
 
 async function handleGeminiQuery(sock, jid, fullText) {
     const query = fullText.replace(/^!gemini\s*/i, '').trim();
-    if (!query) return sock.sendMessage(jid, { text: '🤖 Usage: `!gemini <question>`' });
+
+    if (!query) {
+        await sock.sendMessage(jid, { text: '🤖 *Usage*: `!gemini <question or prompt>`' });
+        return;
+    }
 
     try {
         const res = await ai.models.generateContent({
             model: 'gemini-3.8-flash',
-            contents: `You are an AI WhatsApp assistant. Answer concisely: ${query}`
+            contents: `You are an AI WhatsApp assistant. Answer concisely and clearly:\n${query}`
         });
 
         await sock.sendMessage(jid, { text: `🤖 *Gemini*: ${res.text}` });
+        console.log(`✅ Responded to !gemini query for ${jid}`);
     } catch (err) {
-        await sock.sendMessage(jid, { text: '❌ Error querying Gemini.' });
+        console.error('❌ Gemini Query Error:', err);
+        await sock.sendMessage(jid, { text: '❌ Error processing request with Gemini.' });
     }
 }
 
