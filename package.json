@@ -1,6 +1,6 @@
 {
   "name": "whatsapp-gemini-247-bot",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "type": "module",
   "main": "index.js",
   "scripts": {
@@ -8,9 +8,8 @@
   },
   "dependencies": {
     "@google/genai": "*",
-    "@whiskeysockets/baileys": "^6.7.8",
+    "@whiskeysockets/baileys": "^6.7.18",
     "dotenv": "^16.4.5",
-    "node-cron": "^3.0.3",
-    "qrcode-terminal": "^0.12.0"
+    "node-cron": "^3.0.3"
   }
 }
