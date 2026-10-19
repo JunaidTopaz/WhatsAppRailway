@@ -31,8 +31,9 @@ const client = new Client({
             '--no-zygote',
             '--single-process',
             '--disable-gpu',
-            '--remote-debugging-port=9222',
-            '--disable-features=IsolateOrigins,site-per-process'
+            '--disable-software-rasterizer',
+            '--disable-dev-tools',
+            '--no-default-browser-check'
         ]
     }
 });
