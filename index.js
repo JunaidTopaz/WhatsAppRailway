@@ -5,7 +5,6 @@ import makeWASocket, {
     useMultiFileAuthState, 
     DisconnectReason 
 } from '@whiskeysockets/baileys';
-import qrcode from 'qrcode-terminal';
 import cron from 'node-cron';
 import { GoogleGenAI, Type } from '@google/genai';
 
@@ -13,6 +12,9 @@ if (!process.env.GEMINI_API_KEY) {
     console.error('❌ ERROR: GEMINI_API_KEY environment variable is missing!');
     process.exit(1);
 }
+
+// ⚠️ ENTER YOUR PHONE NUMBER HERE WITH COUNTRY CODE (e.g. "14155552671" or "919876543210")
+const PHONE_NUMBER = process.env.PHONE_NUMBER || "YOUR_PHONE_NUMBER_HERE";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const activeReminders = [];
@@ -27,26 +29,30 @@ async function connectToWhatsApp() {
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
+    // If not registered yet, request a 8-digit Pairing Code
+    if (!sock.authState.creds.registered) {
+        setTimeout(async () => {
+            try {
+                const code = await sock.requestPairingCode(PHONE_NUMBER);
+                console.log('\n==================================================');
+                console.log(`🔑 YOUR WHATSAPP PAIRING CODE IS: ${code}`);
+                console.log('==================================================');
+                console.log('Open WhatsApp on phone -> Linked Devices -> Link with Phone Number -> Enter this code.\n');
+            } catch (err) {
+                console.error('Failed to get pairing code:', err);
+            }
+        }, 3000);
+    }
 
-        if (qr) {
-            console.log('\n==================================================');
-            console.log('SCAN THIS QR CODE IN YOUR RAILWAY LOGS WITH WHATSAPP:');
-            console.log('==================================================\n');
-            // Setting small to false uses full block rendering without line-height gaps
-            qrcode.generate(qr, { small: false });
-            console.log('\n==================================================\n');
-        }
+    sock.ev.on('connection.update', (update) => {
+        const { connection, lastDisconnect } = update;
 
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut);
             console.log('⚠️ Connection closed. Reconnecting...', shouldReconnect);
-            if (shouldReconnect) {
-                connectToWhatsApp();
-            }
+            if (shouldReconnect) connectToWhatsApp();
         } else if (connection === 'open') {
-            console.log('🚀 24/7 Gemini WhatsApp Bot is ONLINE via Baileys WebSockets!');
+            console.log('🚀 24/7 Gemini WhatsApp Bot is ONLINE via Baileys!');
             cron.schedule('*/30 * * * * *', () => checkScheduledReminders(sock));
         }
     });
@@ -56,8 +62,7 @@ async function connectToWhatsApp() {
         if (!msg.message || msg.key.fromMe) return;
 
         const remoteJid = msg.key.remoteJid;
-        const text = msg.message.conversation || 
-                     msg.message.extendedTextMessage?.text || '';
+        const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
 
         if (!text) return;
 
@@ -79,8 +84,7 @@ async function connectToWhatsApp() {
 
 async function parseChatForCommitments(sock, jid, text) {
     try {
-        const prompt = `Analyze this WhatsApp message sent to me: "${text}". Did the sender or user promise a follow-up, document, or task?`;
-
+        const prompt = `Analyze this WhatsApp message: "${text}". Did the user or sender promise a task/reminder?`;
         const res = await ai.models.generateContent({
             model: 'gemini-3.8-flash',
             contents: prompt,
@@ -102,36 +106,21 @@ async function parseChatForCommitments(sock, jid, text) {
 
         if (parsed.hasReminder && parsed.delayMinutes > 0) {
             const triggerTime = new Date(Date.now() + parsed.delayMinutes * 60 * 1000);
-            
-            activeReminders.push({
-                jid,
-                reason: parsed.reason,
-                triggerTime,
-                fired: false
-            });
+            activeReminders.push({ jid, reason: parsed.reason, triggerTime, fired: false });
 
             await sock.sendMessage(jid, { 
                 text: `🤖 *Gemini Bot*: Auto-detected commitment. Reminder set in ${parsed.delayMinutes}m: "${parsed.reason}"` 
             });
         }
-    } catch (err) {
-        // Silently handle errors
-    }
+    } catch (err) {}
 }
 
 async function handleManualReminder(sock, jid, fullText) {
     const text = fullText.replace(/^!remind\s*/i, '').trim();
-
-    if (!text) {
-        await sock.sendMessage(jid, { 
-            text: '🤖 *Usage*: `!remind <task description> in <time>` (e.g. `!remind call client in 10 minutes`)' 
-        });
-        return;
-    }
+    if (!text) return sock.sendMessage(jid, { text: '🤖 Usage: `!remind <task> in <time>`' });
 
     try {
-        const prompt = `Extract task description and delay duration in total minutes from user request: "${text}". Output strictly JSON.`;
-
+        const prompt = `Extract task and delay in minutes from: "${text}". Strictly JSON output.`;
         const res = await ai.models.generateContent({
             model: 'gemini-3.8-flash',
             contents: prompt,
@@ -151,16 +140,8 @@ async function handleManualReminder(sock, jid, fullText) {
         const parsed = JSON.parse(res.text);
         const triggerTime = new Date(Date.now() + parsed.delayMinutes * 60 * 1000);
 
-        activeReminders.push({
-            jid,
-            reason: parsed.reason,
-            triggerTime,
-            fired: false
-        });
-
-        await sock.sendMessage(jid, { 
-            text: `✅ *Reminder set!* I will notify you in ${parsed.delayMinutes} minute(s) about: "${parsed.reason}".` 
-        });
+        activeReminders.push({ jid, reason: parsed.reason, triggerTime, fired: false });
+        await sock.sendMessage(jid, { text: `✅ *Reminder set!* In ${parsed.delayMinutes}m: "${parsed.reason}".` });
     } catch (err) {
         await sock.sendMessage(jid, { text: '❌ Could not parse reminder request.' });
     }
@@ -168,16 +149,12 @@ async function handleManualReminder(sock, jid, fullText) {
 
 async function handleGeminiQuery(sock, jid, fullText) {
     const query = fullText.replace(/^!gemini\s*/i, '').trim();
-
-    if (!query) {
-        await sock.sendMessage(jid, { text: '🤖 *Usage*: `!gemini <question or instruction>`' });
-        return;
-    }
+    if (!query) return sock.sendMessage(jid, { text: '🤖 Usage: `!gemini <question>`' });
 
     try {
         const res = await ai.models.generateContent({
             model: 'gemini-3.8-flash',
-            contents: `You are an AI WhatsApp assistant. User query: ${query}`
+            contents: `You are an AI WhatsApp assistant. Query: ${query}`
         });
 
         await sock.sendMessage(jid, { text: `🤖 *Gemini*: ${res.text}` });
@@ -191,10 +168,9 @@ async function checkScheduledReminders(sock) {
     for (const reminder of activeReminders) {
         if (!reminder.fired && now >= reminder.triggerTime) {
             reminder.fired = true;
-            const alertText = `🔔 *GEMINI FOLLOW-UP REMINDER*\n\n💡 *Task*: ${reminder.reason}\n\n_Don't forget to send your promised update!_`;
-            
-            await sock.sendMessage(reminder.jid, { text: alertText });
-            console.log(`[Alert Fired] Sent reminder to ${reminder.jid}`);
+            await sock.sendMessage(reminder.jid, { 
+                text: `🔔 *GEMINI FOLLOW-UP REMINDER*\n\n💡 *Task*: ${reminder.reason}` 
+            });
         }
     }
 }
