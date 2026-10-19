@@ -8,7 +8,7 @@ import makeWASocket, {
 import cron from 'node-cron';
 import { GoogleGenAI, Type } from '@google/genai';
 
-console.log("🚀 Starting Node.js process...");
+console.log("🚀 Starting Gemini Executive Control Center...");
 
 if (!process.env.GEMINI_API_KEY) {
     console.error('❌ ERROR: GEMINI_API_KEY environment variable is missing!');
@@ -50,8 +50,7 @@ async function connectToWhatsApp() {
                 const code = await sock.requestPairingCode(PHONE_NUMBER);
                 console.log('\n==================================================');
                 console.log(`🔑 YOUR WHATSAPP PAIRING CODE IS: ${code}`);
-                console.log('==================================================');
-                console.log('Open WhatsApp -> Linked Devices -> Link with Phone Number -> Enter code.\n');
+                console.log('==================================================\n');
             } catch (err) {
                 console.error('❌ Error requesting pairing code:', err);
             }
@@ -91,13 +90,24 @@ async function connectToWhatsApp() {
 
                 if (!text.trim()) continue;
 
+                // ----------------------------------------------------
+                // INFINITE LOOP GUARD (CRITICAL FIX)
+                // Ignore messages sent by yourself if they start with bot emojis/prefixes
+                // ----------------------------------------------------
+                if (msg.key.fromMe) {
+                    if (text.startsWith('🤖') || text.startsWith('❌') || text.startsWith('📝') || text.startsWith('⏰') || text.startsWith('🔔') || text.startsWith('Got it')) {
+                        continue;
+                    }
+                }
+
+                // Case 1: Message inside Control Center Group -> Interactive Chat
                 if (targetGroupJid && remoteJid === targetGroupJid) {
-                    if (msg.key.fromMe && text.startsWith('🤖')) continue;
                     console.log(`💬 [Control Center Command Received]: "${text}"`);
                     await handleControlCenterInteractiveCommand(sock, targetGroupJid, text);
                     continue;
                 }
 
+                // Case 2: Message in any OTHER chat -> Passive Background Observer
                 if (!msg.key.fromMe) {
                     console.log(`👁️ [Passive Analysis] Chat: ${remoteJid} | Text: "${text}"`);
                     await passivelyAnalyzeMessage(sock, remoteJid, text);
@@ -123,7 +133,7 @@ async function findAndBindTargetGroup(sock) {
                 return;
             }
         }
-        console.warn(`⚠️ Target group "${TARGET_GROUP_NAME}" not found. Create a WhatsApp group named "${TARGET_GROUP_NAME}".`);
+        console.warn(`⚠️ Target group "${TARGET_GROUP_NAME}" not found yet. Create a WhatsApp group named "${TARGET_GROUP_NAME}".`);
     } catch (err) {
         console.error('❌ Error fetching groups:', err.message);
     }
@@ -133,7 +143,25 @@ async function passivelyAnalyzeMessage(sock, chatJid, text) {
     if (!targetGroupJid) return;
 
     try {
-        const prompt = `Analyze this message: "${text}". Output strictly raw JSON.`;
+        const prompt = `
+        You are an AI Executive Assistant monitoring incoming WhatsApp messages.
+        Analyze this incoming message: "${text}"
+
+        Determine if it contains:
+        1. A commitment, promise, action item, or follow-up requirement.
+        2. Important factual info (address, pricing, meeting time) worth saving as a note.
+
+        Respond ONLY with raw JSON:
+        {
+            "hasActionItem": true/false,
+            "hasNoteableInfo": true/false,
+            "actionReason": "short task description",
+            "delayMinutes": 10,
+            "noteCategory": "e.g., General / Meeting / Price",
+            "noteContent": "concise note summary"
+        }
+        `;
+
         const res = await ai.models.generateContent({
             model: 'gemini-3.8-flash',
             contents: prompt,
@@ -178,12 +206,15 @@ async function passivelyAnalyzeMessage(sock, chatJid, text) {
                 text: `⏰ *ACTION ITEM DETECTED*\n\n📌 *Task*: ${parsed.actionReason}\n⏳ *Follow-Up Scheduled In*: ${parsed.delayMinutes} minute(s)`
             });
         }
-    } catch (err) {}
+    } catch (err) {
+        console.error('❌ Passive analysis error:', err.message);
+    }
 }
 
 async function handleControlCenterInteractiveCommand(sock, groupJid, userText) {
     const lowerText = userText.toLowerCase().trim();
 
+    // Command 1: List Notes
     if (lowerText.includes('show notes') || lowerText.includes('list notes')) {
         if (savedNotes.length === 0) {
             await sock.sendMessage(groupJid, { text: '📝 *Gemini*: No notes logged yet today.' });
@@ -199,6 +230,7 @@ async function handleControlCenterInteractiveCommand(sock, groupJid, userText) {
         return;
     }
 
+    // Command 2: List Reminders
     if (lowerText.includes('show reminders') || lowerText.includes('list reminders')) {
         const pending = scheduledReminders.filter(r => !r.fired);
         if (pending.length === 0) {
@@ -215,18 +247,66 @@ async function handleControlCenterInteractiveCommand(sock, groupJid, userText) {
         return;
     }
 
+    // Command 3: Set Reminders explicitly from within group
     try {
         const notesContext = savedNotes.slice(-5).map(n => `[${n.category}]: ${n.content}`).join('\n');
-        const prompt = `You are an AI Executive Assistant operating inside the user's private WhatsApp Control Center group. Saved Notes Context:\n${notesContext || 'None'}\n\nUser Prompt: ${userText}`;
+        
+        const prompt = `
+        You are an AI Executive Assistant operating inside the user's private WhatsApp Control Center group.
+        
+        Recent Saved Notes Context:
+        ${notesContext || 'None'}
+
+        User Prompt: "${userText}"
+
+        Analyze the user prompt. Is the user asking to set a reminder/timer, or asking a general question/request?
+        
+        Respond ONLY in raw JSON matching this schema:
+        {
+            "isReminderRequest": true/false,
+            "taskDescription": "clean description of task",
+            "delayMinutes": 5,
+            "generalResponse": "direct reply to user if not a reminder request"
+        }
+        `;
 
         const res = await ai.models.generateContent({
             model: 'gemini-3.8-flash',
-            contents: prompt
+            contents: prompt,
+            config: {
+                responseMimeType: 'application/json',
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        isReminderRequest: { type: Type.BOOLEAN },
+                        taskDescription: { type: Type.STRING },
+                        delayMinutes: { type: Type.NUMBER },
+                        generalResponse: { type: Type.STRING }
+                    },
+                    required: ['isReminderRequest']
+                }
+            }
         });
 
-        await sock.sendMessage(groupJid, { text: `🤖 ${res.text}` });
+        const parsed = JSON.parse(res.text);
+
+        if (parsed.isReminderRequest && parsed.delayMinutes > 0) {
+            const triggerTime = new Date(Date.now() + parsed.delayMinutes * 60 * 1000);
+            scheduledReminders.push({ chatJid: groupJid, reason: parsed.taskDescription, triggerTime, fired: false });
+
+            await sock.sendMessage(groupJid, {
+                text: `🤖 Got it. Reminder set for ${parsed.delayMinutes} minutes from now:\n\n⏰ *Task:* ${parsed.taskDescription}\n⏱️ *Time:* In ${parsed.delayMinutes} minutes\n\nI'll buzz you right here when it's time.`
+            });
+            return;
+        }
+
+        // Standard Conversational Reply
+        const responseText = parsed.generalResponse || "I've processed your request.";
+        await sock.sendMessage(groupJid, { text: `🤖 ${responseText}` });
+
     } catch (err) {
-        await sock.sendMessage(groupJid, { text: '❌ Error generating response.' });
+        console.error('❌ Control Center Error:', err);
+        // Silent catch: Prevents sending repeated error messages to chat during failures
     }
 }
 
@@ -239,7 +319,7 @@ async function checkScheduledReminders(sock) {
             reminder.fired = true;
 
             await sock.sendMessage(targetGroupJid, {
-                text: `🔔 *DUE REMINDER ALERT*\n\n📌 *Task*: ${reminder.reason}\n\n_Make sure to execute or reply to your contact!_`
+                text: `🔔 *DUE REMINDER ALERT*\n\n📌 *Task*: ${reminder.reason}\n\n_Make sure to check or follow up!_`
             });
         }
     }
