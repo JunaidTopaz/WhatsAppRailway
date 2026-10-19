@@ -19,7 +19,7 @@ const PHONE_NUMBER = (process.env.PHONE_NUMBER || "").replace(/[^0-9]/g, '');
 const TARGET_GROUP_NAME = process.env.TARGET_GROUP_NAME || "Gemini Control Center";
 
 // Stable model with 1,500 daily requests
-const MODEL_NAME = 'gemini-2.5-flash';
+const MODEL_NAME = 'gemini-3.6-flash';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const scheduledReminders = [];
