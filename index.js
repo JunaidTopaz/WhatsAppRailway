@@ -18,7 +18,6 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const activeReminders = [];
 
 async function connectToWhatsApp() {
-    // Saves auth session in /app/session_data (Railway persistent volume)
     const { state, saveCreds } = await useMultiFileAuthState('/app/session_data');
 
     const sock = makeWASocket({
@@ -33,9 +32,10 @@ async function connectToWhatsApp() {
 
         if (qr) {
             console.log('\n==================================================');
-            console.log('SCAN THIS QR CODE IN YOUR RAILWAY LOGS WITH WHATSAPP');
+            console.log('SCAN THIS QR CODE IN YOUR RAILWAY LOGS WITH WHATSAPP:');
             console.log('==================================================\n');
-            qrcode.generate(qr, { small: true });
+            // Setting small to false uses full block rendering without line-height gaps
+            qrcode.generate(qr, { small: false });
             console.log('\n==================================================\n');
         }
 
@@ -47,7 +47,6 @@ async function connectToWhatsApp() {
             }
         } else if (connection === 'open') {
             console.log('🚀 24/7 Gemini WhatsApp Bot is ONLINE via Baileys WebSockets!');
-            // Start reminder cron worker
             cron.schedule('*/30 * * * * *', () => checkScheduledReminders(sock));
         }
     });
@@ -62,19 +61,16 @@ async function connectToWhatsApp() {
 
         if (!text) return;
 
-        // Command: !remind <task> in <time>
         if (text.toLowerCase().startsWith('!remind')) {
             await handleManualReminder(sock, remoteJid, text);
             return;
         }
 
-        // Command: !gemini <query>
         if (text.toLowerCase().startsWith('!gemini')) {
             await handleGeminiQuery(sock, remoteJid, text);
             return;
         }
 
-        // Auto-detect commitments in messages
         if (text.length > 8) {
             await parseChatForCommitments(sock, remoteJid, text);
         }
@@ -119,7 +115,7 @@ async function parseChatForCommitments(sock, jid, text) {
             });
         }
     } catch (err) {
-        // Silently handle parsing errors
+        // Silently handle errors
     }
 }
 
