@@ -7,10 +7,10 @@
     "start": "node index.js"
   },
   "dependencies": {
-  "@google/genai": "*",
-  "dotenv": "^16.4.5",
-  "node-cron": "^3.0.3",
-  "qrcode-terminal": "^0.12.0",
-  "whatsapp-web.js": "^1.26.0"
-}
+    "@google/genai": "*",
+    "dotenv": "^16.4.5",
+    "node-cron": "^3.0.3",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.26.0"
+  }
 }
