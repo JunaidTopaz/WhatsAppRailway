@@ -7,7 +7,6 @@ import qrcode from 'qrcode-terminal';
 import cron from 'node-cron';
 import { GoogleGenAI, Type } from '@google/genai';
 
-// Guard against missing API key
 if (!process.env.GEMINI_API_KEY) {
     console.error('❌ ERROR: GEMINI_API_KEY environment variable is not set!');
     process.exit(1);
@@ -15,7 +14,8 @@ if (!process.env.GEMINI_API_KEY) {
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-// Launch WhatsApp client using the Docker container's system Chromium
+console.log("🛠️ Launching WhatsApp Client using system Chromium at:", process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium');
+
 const client = new Client({
     authStrategy: new LocalAuth({ dataPath: '/app/session_data' }),
     puppeteer: {
@@ -32,8 +32,7 @@ const client = new Client({
             '--disable-gpu',
             '--disable-software-rasterizer',
             '--disable-dev-tools',
-            '--no-default-browser-check',
-            '--disable-features=IsolateOrigins,site-per-process'
+            '--no-default-browser-check'
         ]
     }
 });
@@ -51,6 +50,14 @@ client.on('qr', (qr) => {
 client.on('ready', () => {
     console.log('🚀 24/7 Gemini WhatsApp Bot is ONLINE on Railway!');
     cron.schedule('*/30 * * * * *', checkScheduledReminders);
+});
+
+client.on('auth_failure', (msg) => {
+    console.error('❌ Authentication failure:', msg);
+});
+
+client.on('disconnected', (reason) => {
+    console.warn('⚠️ WhatsApp disconnected:', reason);
 });
 
 client.on('message_create', async (msg) => {
@@ -117,7 +124,7 @@ async function parseChatForCommitments(chat) {
             }
         }
     } catch (err) {
-        // Skip background errors
+        // Silently handle analysis errors
     }
 }
 
@@ -130,7 +137,7 @@ async function handleManualReminder(msg, chat) {
     }
 
     try {
-        const prompt = `Extract task description and delay duration in total minutes from user request: "${text}". Output strictly JSON.`;
+        const prompt = `Extract the task description and delay duration in total minutes from user request: "${text}". Output strictly JSON.`;
         
         const res = await ai.models.generateContent({
             model: 'gemini-3.8-flash',
@@ -201,4 +208,5 @@ async function checkScheduledReminders() {
     }
 }
 
+console.log("⚡ Initializing WhatsApp Client...");
 client.initialize();
