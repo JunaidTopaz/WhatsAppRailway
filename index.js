@@ -18,7 +18,7 @@ if (!process.env.GEMINI_API_KEY) {
 const PHONE_NUMBER = (process.env.PHONE_NUMBER || "").replace(/[^0-9]/g, '');
 const TARGET_GROUP_NAME = process.env.TARGET_GROUP_NAME || "Gemini Control Center";
 
-// Use stable Flash model with higher free-tier quota limits (1,500 RPD)
+// Stable model with 1,500 daily requests
 const MODEL_NAME = 'gemini-2.5-flash';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
@@ -292,4 +292,32 @@ async function handleControlCenterInteractiveCommand(sock, groupJid, userText) {
             scheduledReminders.push({ chatJid: groupJid, reason: parsed.taskDescription, triggerTime, fired: false });
 
             await sock.sendMessage(groupJid, {
-                text:
+                text: `🤖 Got it. Reminder set for ${parsed.delayMinutes} minutes from now:\n\n⏰ *Task:* ${parsed.taskDescription}\n⏱️ *Time:* In ${parsed.delayMinutes} minutes\n\nI'll buzz you right here when it's time.`
+            });
+            return;
+        }
+
+        const responseText = parsed.generalResponse || "I've processed your request.";
+        await sock.sendMessage(groupJid, { text: `🤖 ${responseText}` });
+
+    } catch (err) {
+        console.error('❌ Control Center Error:', err.message);
+    }
+}
+
+async function checkScheduledReminders(sock) {
+    if (!targetGroupJid) return;
+
+    const now = new Date();
+    for (const reminder of scheduledReminders) {
+        if (!reminder.fired && now >= reminder.triggerTime) {
+            reminder.fired = true;
+
+            await sock.sendMessage(targetGroupJid, {
+                text: `🔔 *DUE REMINDER ALERT*\n\n📌 *Task*: ${reminder.reason}\n\n_Make sure to check or follow up!_`
+            });
+        }
+    }
+}
+
+connectToWhatsApp();
