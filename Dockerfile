@@ -1,6 +1,11 @@
 FROM node:20-slim
 
-# Install Chromium and required headless dependencies for Puppeteer/whatsapp-web.js
+# Suppress Linux D-Bus desktop bus errors in headless container
+ENV DBUS_SESSION_BUS_ADDRESS=/dev/null \
+    PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
+# Install Chromium and missing Linux shared libraries
 RUN apt-get update && apt-get install -y \
     chromium \
     fonts-liberation \
@@ -39,10 +44,6 @@ RUN apt-get update && apt-get install -y \
     xdg-utils \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
-
-# Point Puppeteer to system Chromium executable
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 WORKDIR /app
 
