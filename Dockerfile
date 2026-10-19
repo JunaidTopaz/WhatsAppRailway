@@ -1,6 +1,11 @@
 FROM node:20-bookworm-slim
 
-# Install system Chromium, fonts, and required shared libraries
+# Bypass DBUS and tell Puppeteer to use container Chromium
+ENV DBUS_SESSION_BUS_ADDRESS=/dev/null \
+    PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
+# Install Chromium and missing Linux shared libraries
 RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
     fonts-ipafont-gothic \
@@ -12,16 +17,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dbus \
     && rm -rf /var/lib/apt/lists/*
 
-# Tell Puppeteer to use the pre-installed container Chromium
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
-    CHROME_BIN=/usr/bin/chromium \
-    DBUS_SESSION_BUS_ADDRESS=/dev/null
-
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm install --omit=dev
 
 COPY . .
 
