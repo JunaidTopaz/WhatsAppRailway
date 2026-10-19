@@ -1,6 +1,6 @@
 FROM node:20-slim
 
-# Suppress Linux D-Bus desktop bus errors in headless container
+# Bypass DBUS, crashpad, and desktop bus sockets inside headless Docker containers
 ENV DBUS_SESSION_BUS_ADDRESS=/dev/null \
     PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
