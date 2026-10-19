@@ -7,16 +7,15 @@ import qrcode from 'qrcode-terminal';
 import cron from 'node-cron';
 import { GoogleGenAI, Type } from '@google/genai';
 
-// Verify API Key existence early to prevent cryptic runtime crashes
+// Guard against missing API key
 if (!process.env.GEMINI_API_KEY) {
     console.error('❌ ERROR: GEMINI_API_KEY environment variable is not set!');
     process.exit(1);
 }
 
-// Initialize Google Gemini SDK
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-// Initialize WhatsApp Web Client using system Chromium and persistent auth volume
+// Launch WhatsApp client using the Docker container's system Chromium
 const client = new Client({
     authStrategy: new LocalAuth({ dataPath: '/app/session_data' }),
     puppeteer: {
@@ -30,18 +29,13 @@ const client = new Client({
             '--no-first-run',
             '--no-zygote',
             '--single-process',
-            '--disable-gpu',
-            '--disable-software-rasterizer',
-            '--disable-dev-tools',
-            '--no-default-browser-check'
+            '--disable-gpu'
         ]
     }
 });
 
-// Store scheduled follow-ups
 const activeReminders = [];
 
-// 1. Output QR Code to Railway Deploy Logs for scanning
 client.on('qr', (qr) => {
     console.log('\n==================================================');
     console.log('SCAN THIS QR CODE IN YOUR RAILWAY LOGS WITH WHATSAPP');
@@ -52,37 +46,29 @@ client.on('qr', (qr) => {
 
 client.on('ready', () => {
     console.log('🚀 24/7 Gemini WhatsApp Bot is ONLINE on Railway!');
-    // Check scheduled reminders every 30 seconds
     cron.schedule('*/30 * * * * *', checkScheduledReminders);
 });
 
-// 2. Listen to active messages
 client.on('message_create', async (msg) => {
     if (msg.isStatus || msg.from === 'status@broadcast') return;
 
     const chat = await msg.getChat();
 
-    // Command Check: !remind <message or prompt>
     if (msg.body.toLowerCase().startsWith('!remind')) {
         await handleManualReminder(msg, chat);
         return;
     }
 
-    // Direct Prompt Check: !gemini <query>
     if (msg.body.toLowerCase().startsWith('!gemini')) {
         await handleGeminiQuery(msg, chat);
         return;
     }
 
-    // Auto-analyze conversation for follow-up promises
     if (msg.body.length > 5) {
         await parseChatForCommitments(chat);
     }
 });
 
-/**
- * Parses conversation history with Gemini 3.8 Flash to detect commitments
- */
 async function parseChatForCommitments(chat) {
     try {
         const history = await chat.fetchMessages({ limit: 6 });
@@ -112,7 +98,6 @@ async function parseChatForCommitments(chat) {
         if (parsed.hasReminder && parsed.delayMinutes > 0) {
             const triggerTime = new Date(Date.now() + parsed.delayMinutes * 60 * 1000);
             
-            // Prevent duplicate entries
             const duplicate = activeReminders.some(r => r.chatId === chat.id._serialized && !r.fired);
             if (!duplicate) {
                 activeReminders.push({
@@ -128,13 +113,10 @@ async function parseChatForCommitments(chat) {
             }
         }
     } catch (err) {
-        // Silently skip background analysis errors
+        // Skip background errors
     }
 }
 
-/**
- * Handles explicit !remind requests
- */
 async function handleManualReminder(msg, chat) {
     const text = msg.body.replace(/^!remind\s*/i, '').trim();
 
@@ -144,7 +126,7 @@ async function handleManualReminder(msg, chat) {
     }
 
     try {
-        const prompt = `Extract the task description and delay duration in total minutes from user request: "${text}". Output strictly JSON.`;
+        const prompt = `Extract task description and delay duration in total minutes from user request: "${text}". Output strictly JSON.`;
         
         const res = await ai.models.generateContent({
             model: 'gemini-3.8-flash',
@@ -175,13 +157,10 @@ async function handleManualReminder(msg, chat) {
 
         await msg.reply(`✅ *Reminder set!* I will notify you in ${parsed.delayMinutes} minute(s) about: "${parsed.reason}".`);
     } catch (err) {
-        await msg.reply('❌ Could not parse reminder request. Try: `!remind call John in 30 minutes`');
+        await msg.reply('❌ Could not parse reminder request.');
     }
 }
 
-/**
- * Handles explicit !gemini queries
- */
 async function handleGeminiQuery(msg, chat) {
     const query = msg.body.replace(/^!gemini\s*/i, '').trim();
 
@@ -205,9 +184,6 @@ async function handleGeminiQuery(msg, chat) {
     }
 }
 
-/**
- * Triggers pending follow-up alerts
- */
 async function checkScheduledReminders() {
     const now = new Date();
     for (const reminder of activeReminders) {
