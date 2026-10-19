@@ -13,8 +13,7 @@ if (!process.env.GEMINI_API_KEY) {
     process.exit(1);
 }
 
-// ⚠️ ENTER YOUR PHONE NUMBER HERE WITH COUNTRY CODE (e.g. "14155552671" or "919876543210")
-const PHONE_NUMBER = process.env.PHONE_NUMBER || "YOUR_PHONE_NUMBER_HERE";
+const PHONE_NUMBER = process.env.PHONE_NUMBER || "";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const activeReminders = [];
@@ -24,13 +23,19 @@ async function connectToWhatsApp() {
 
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: false
+        printQRInTerminal: false,
+        syncFullHistory: false,
+        markOnlineOnConnect: false,
+        fireInitQueries: false
     });
 
     sock.ev.on('creds.update', saveCreds);
 
-    // If not registered yet, request a 8-digit Pairing Code
     if (!sock.authState.creds.registered) {
+        if (!PHONE_NUMBER) {
+            console.error('❌ PHONE_NUMBER environment variable is required for pairing code authentication!');
+            process.exit(1);
+        }
         setTimeout(async () => {
             try {
                 const code = await sock.requestPairingCode(PHONE_NUMBER);
@@ -52,7 +57,7 @@ async function connectToWhatsApp() {
             console.log('⚠️ Connection closed. Reconnecting...', shouldReconnect);
             if (shouldReconnect) connectToWhatsApp();
         } else if (connection === 'open') {
-            console.log('🚀 24/7 Gemini WhatsApp Bot is ONLINE via Baileys!');
+            console.log('🚀 24/7 Gemini WhatsApp Bot is ONLINE and ready!');
             cron.schedule('*/30 * * * * *', () => checkScheduledReminders(sock));
         }
     });
@@ -84,7 +89,7 @@ async function connectToWhatsApp() {
 
 async function parseChatForCommitments(sock, jid, text) {
     try {
-        const prompt = `Analyze this WhatsApp message: "${text}". Did the user or sender promise a task/reminder?`;
+        const prompt = `Analyze this WhatsApp message: "${text}". Did the user or sender promise a task, document, or follow-up?`;
         const res = await ai.models.generateContent({
             model: 'gemini-3.8-flash',
             contents: prompt,
